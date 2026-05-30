@@ -1,5 +1,12 @@
 #include "minfs.h"
 
+/**/
+static uint32_t zone_to_block(const Superblock *superblock, uint32_t zone)
+{
+    if (zone == 0) return 0;
+    return zone << superblock->log_zone_size;
+}
+
 static void print_partition_entry(const PartitionEntry *entry, int index)
 {
     fprintf(stderr,
@@ -190,6 +197,8 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
     uint32_t zone_number;
     long indirect_offset;
 
+    uint32_t indirect_block;
+
     entries_per_indirect_block =
         superblock->blocksize / sizeof(uint32_t);
 
@@ -209,8 +218,9 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
         }
 
         indirect_zone = inode->indirect;
+        indirect_block = zone_to_block(superblock, indirect_zone);
         indirect_offset = fs_offset +
-                          indirect_zone * superblock->blocksize +
+                          (long)indirect_block * superblock->blocksize +
                           file_block_index * sizeof(uint32_t);
 
         if (read_bytes(image_fp, indirect_offset,
@@ -229,18 +239,21 @@ int read_file_block(FILE *image_fp, long fs_offset,
                     uint32_t file_block_index, void *buffer)
 {
     uint32_t zone_number;
+    uint32_t block_number;
     long block_offset;
 
     zone_number = get_file_zone(image_fp, fs_offset,
                                 superblock, inode,
                                 file_block_index);
 
-    if (zone_number == 0) {
+    block_number = zone_to_block(superblock, zone_number);
+
+    if (block_number == 0) {
         memset(buffer, 0, superblock->blocksize);
         return 0;
     }
 
-    block_offset = fs_offset + zone_number * superblock->blocksize;
+    block_offset = fs_offset + (long)block_number * superblock->blocksize;
 
     return read_bytes(image_fp, block_offset,
                       buffer, superblock->blocksize);
@@ -378,6 +391,11 @@ int resolve_path(FILE *image_fp, long fs_offset,
     component = strtok(path_copy, "/");
 
     while (component != NULL) {
+        /*if (strcmp(component, ".") == 0){
+            component = strtok(NULL, "/");
+            continue;
+        }*/
+
         if (!is_directory_mode(current_inode.mode)) {
             return -1;
         }

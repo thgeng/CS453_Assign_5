@@ -41,6 +41,18 @@ static void print_verbose_inode(uint32_t inode_number,
     }
 }
 
+/*Strips Leading '/' for display formatting*/
+static const char *get_file_display_name(const char *path)
+{
+    if ((path == NULL) || (path[0] == '\0')) return ".";
+
+    /*Skip Leading '/'*/
+    while (*path == '/') path++;
+
+    /*If path is '/', root*/
+    return (*path == '\0') ? "." : path;
+}
+
 /*
  *  * Parse command-line options without getopt.
  *
@@ -217,7 +229,7 @@ int main(int argc, char *argv[])
             return 1;
         }
     } else if (is_regular_mode(target_inode.mode)) {
-        print_inode_summary(&target_inode, lookup_path);
+        print_inode_summary(&target_inode, get_file_display_name(lookup_path));
     } else {
         fprintf(stderr, "Unsupported file type: %s\n", lookup_path);
         fclose(image_fp);
