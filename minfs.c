@@ -198,21 +198,22 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
     long indirect_offset;
 
     uint32_t indirect_block;
+    uint32_t logic_zone_idx = file_block_index >> superblock->log_zone_size;
 
     entries_per_indirect_block =
         superblock->blocksize / sizeof(uint32_t);
 
-    if (file_block_index < DIRECT_ZONES) {
-        return inode->zone[file_block_index];
+    if (logic_zone_idx < DIRECT_ZONES) {
+        return inode->zone[logic_zone_idx];
     }
 
     /*
  * For blocks beyond the direct zone pointers, inode->indirect
  * points to a block containing an array of zone numbers.
  */
-    file_block_index -= DIRECT_ZONES;
+    logic_zone_idx -= DIRECT_ZONES;
 
-    if (file_block_index < entries_per_indirect_block) {
+    if (logic_zone_idx < entries_per_indirect_block) {
         if (inode->indirect == 0) {
             return 0;
         }
@@ -221,7 +222,7 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
         indirect_block = zone_to_block(superblock, indirect_zone);
         indirect_offset = fs_offset +
                           (long)indirect_block * superblock->blocksize +
-                          file_block_index * sizeof(uint32_t);
+                          logic_zone_idx * sizeof(uint32_t);
 
         if (read_bytes(image_fp, indirect_offset,
                        &zone_number, sizeof(uint32_t)) != 0) {
@@ -233,7 +234,7 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
     return 0;
 }
 
-int read_file_block(FILE *image_fp, long fs_offset,
+/*int read_file_block(FILE *image_fp, long fs_offset,
                     const Superblock *superblock,
                     const Inode *inode,
                     uint32_t file_block_index, void *buffer)
@@ -246,17 +247,41 @@ int read_file_block(FILE *image_fp, long fs_offset,
                                 superblock, inode,
                                 file_block_index);
 
-    block_number = zone_to_block(superblock, zone_number);
-
     if (block_number == 0) {
         memset(buffer, 0, superblock->blocksize);
         return 0;
     }
 
+    block_number = zone_to_block(superblock, zone_number) 
+        + (file_block_index & ((1U << superblock->log_zone_size) -1));
+
     block_offset = fs_offset + (long)block_number * superblock->blocksize;
 
     return read_bytes(image_fp, block_offset,
                       buffer, superblock->blocksize);
+}*/
+int read_file_block(FILE *image_fp, long fs_offset,
+                    const Superblock *superblock,
+                    const Inode *inode,
+                    uint32_t file_block_index, void *buffer)
+{
+    uint32_t zone_number = get_file_zone(image_fp, fs_offset, 
+                                superblock, inode, file_block_index);
+
+    if (zone_number == 0) {
+        memset(buffer, 0, superblock->blocksize);
+        return 0;
+    }
+
+    uint32_t block_number = zone_to_block(superblock, zone_number);
+
+    if (superblock->log_zone_size > 0){
+        block_number += file_block_index & ((1U<<superblock->log_zone_size)-1);
+    }
+
+    long block_offset = fs_offset + (long)block_number * superblock->blocksize;
+
+    return read_bytes(image_fp, block_offset, buffer, superblock->blocksize);
 }
 
 int is_directory_mode(uint16_t mode)
