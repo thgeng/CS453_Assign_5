@@ -1,6 +1,7 @@
 #include "minfs.h"
 
-/**/
+/* Convert Azone number to starting block number. 
+ * Zone 0 is special (never valid data zone). */
 static uint32_t zone_to_block(const Superblock *superblock, uint32_t zone)
 {
     if (zone == 0) return 0;
@@ -136,9 +137,6 @@ int resolve_filesystem_offset(FILE *image_fp, int has_partition,
         return -1;
     }
 
-    /*
- * sector number relative to the whole disk image.
- */
     *fs_offset = (long) chosen.lFirst * SECTOR_SIZE;
 
     return 0;
@@ -187,79 +185,106 @@ int read_inode(FILE *image_fp, long fs_offset,
     return read_bytes(image_fp, inode_offset, inode, sizeof(Inode));
 }
 
+/*
+ * get_file_zone: Return the zone number for the zone containing the given
+ * file_block_index (0-based block number in the file's data).
+ * Returns 0 for holes (unallocated zones) or invalid/out-of-range.
+ * Supports direct, single-indirect, and double-indirect zones.
+ * This enables correct handling of sparse files (holes) at all levels.
+ */
 uint32_t get_file_zone(FILE *image_fp, long fs_offset,
                        const Superblock *superblock,
                        const Inode *inode,
                        uint32_t file_block_index)
 {
-    uint32_t entries_per_indirect_block;
-    uint32_t indirect_zone;
+    uint32_t entries_per_indirect;
+    uint32_t logic_zone_idx;
     uint32_t zone_number;
-    long indirect_offset;
 
-    uint32_t indirect_block;
-    uint32_t logic_zone_idx = file_block_index >> superblock->log_zone_size;
+    entries_per_indirect = superblock->blocksize / sizeof(uint32_t);
+    logic_zone_idx = file_block_index >> superblock->log_zone_size;
 
-    entries_per_indirect_block =
-        superblock->blocksize / sizeof(uint32_t);
-
+    /* Direct zones */
     if (logic_zone_idx < DIRECT_ZONES) {
         return inode->zone[logic_zone_idx];
     }
-
-    /*
- * For blocks beyond the direct zone pointers, inode->indirect
- * points to a block containing an array of zone numbers.
- */
     logic_zone_idx -= DIRECT_ZONES;
 
-    if (logic_zone_idx < entries_per_indirect_block) {
+    /* Single indirect */
+    if (logic_zone_idx < entries_per_indirect) {
+        uint32_t indirect_zone;
+        uint32_t indirect_block;
+        long indirect_offset;
+
         if (inode->indirect == 0) {
-            return 0;
+            return 0;  /* hole or unallocated indirect */
         }
 
         indirect_zone = inode->indirect;
         indirect_block = zone_to_block(superblock, indirect_zone);
-        indirect_offset = fs_offset +
-                          (long)indirect_block * superblock->blocksize +
-                          logic_zone_idx * sizeof(uint32_t);
+        indirect_offset = fs_offset+(long)indirect_block*superblock->blocksize
+                          + logic_zone_idx * sizeof(uint32_t);
 
-        if (read_bytes(image_fp, indirect_offset,
-                       &zone_number, sizeof(uint32_t)) != 0) {
+        if (read_bytes(image_fp, 
+                indirect_offset, 
+                &zone_number, 
+                sizeof(uint32_t)) != 0) {
             return 0;
         }
-
-        return zone_number;
+        return zone_number;  /* may be 0 for hole in this indirect entry */
     }
+    logic_zone_idx -= entries_per_indirect;
+
+    /* Double indirect */
+    if (logic_zone_idx<(uint64_t)entries_per_indirect * entries_per_indirect) {
+        uint32_t d1, d2;  /* indices in first and second level */
+        uint32_t d_indirect_zone;
+        uint32_t d_indirect_block;
+        long d_offset;
+        uint32_t single_indirect_zone;  /* zone# of the single-indirect zone */
+        uint32_t single_indirect_block;
+        long s_offset;
+
+        d1 = logic_zone_idx / entries_per_indirect;
+        d2 = logic_zone_idx % entries_per_indirect;
+
+        if (inode->two_indirect == 0) {
+            return 0;  /* no double indirect allocated->hole for this range */
+        }
+
+        d_indirect_zone = inode->two_indirect;
+        d_indirect_block = zone_to_block(superblock, d_indirect_zone);
+        d_offset = fs_offset + (long)d_indirect_block * superblock->blocksize
+                   + d1 * sizeof(uint32_t);
+
+        if (read_bytes(image_fp, 
+                d_offset, 
+                &single_indirect_zone, 
+                sizeof(uint32_t)) != 0) {
+            return 0;
+        }
+        if (single_indirect_zone == 0) {
+            return 0;  /* hole at first level of double-indirect */
+        }
+
+        /* Now lookup in the single-indirect zone's first block */
+        single_indirect_block=zone_to_block(superblock, single_indirect_zone);
+        s_offset = fs_offset+(long)single_indirect_block*superblock->blocksize
+                   + d2 * sizeof(uint32_t);
+
+        if (read_bytes(image_fp, 
+                s_offset, 
+                &zone_number, 
+                sizeof(uint32_t)) != 0) {
+            return 0;
+        }
+        return zone_number;  /* may be 0 -> hole */
+    }
+
+    /* Beyond supported range (triple indirect not in Minix V3) */
     return 0;
 }
 
-/*int read_file_block(FILE *image_fp, long fs_offset,
-                    const Superblock *superblock,
-                    const Inode *inode,
-                    uint32_t file_block_index, void *buffer)
-{
-    uint32_t zone_number;
-    uint32_t block_number;
-    long block_offset;
-
-    zone_number = get_file_zone(image_fp, fs_offset,
-                                superblock, inode,
-                                file_block_index);
-
-    if (block_number == 0) {
-        memset(buffer, 0, superblock->blocksize);
-        return 0;
-    }
-
-    block_number = zone_to_block(superblock, zone_number) 
-        + (file_block_index & ((1U << superblock->log_zone_size) -1));
-
-    block_offset = fs_offset + (long)block_number * superblock->blocksize;
-
-    return read_bytes(image_fp, block_offset,
-                      buffer, superblock->blocksize);
-}*/
 int read_file_block(FILE *image_fp, long fs_offset,
                     const Superblock *superblock,
                     const Inode *inode,
@@ -269,14 +294,15 @@ int read_file_block(FILE *image_fp, long fs_offset,
                                 superblock, inode, file_block_index);
 
     if (zone_number == 0) {
+        /* Hole:entire zone (thus this block) is zeros. Per assignment spec. */
         memset(buffer, 0, superblock->blocksize);
         return 0;
     }
 
     uint32_t block_number = zone_to_block(superblock, zone_number);
 
-    if (superblock->log_zone_size > 0){
-        block_number += file_block_index & ((1U<<superblock->log_zone_size)-1);
+    if (superblock->log_zone_size > 0) {
+        block_number+=file_block_index&((1U << superblock->log_zone_size) - 1);
     }
 
     long block_offset = fs_offset + (long)block_number * superblock->blocksize;
@@ -366,9 +392,11 @@ int find_in_directory(FILE *image_fp, long fs_offset,
                 continue;
             }
 
-            entries[entry_index].name[59] = '\0';
+            char safe_name[61];
+            memcpy(safe_name, entries[entry_index].name, 60);
+            safe_name[60] = '\0';
 
-            if (strcmp(entries[entry_index].name, name) == 0) {
+            if (strcmp(safe_name, name) == 0) {
                 *inode_number_out = entries[entry_index].inode;
                 free(block_buffer);
                 return 0;
@@ -402,10 +430,6 @@ int resolve_path(FILE *image_fp, long fs_offset,
         return -1;
     }
 
-    /*
- * A missing path, "/" path, or relative path without components
- * all start from the root inode.
- */
     if (path[0] == '\0' || strcmp(path, "/") == 0) {
         *inode_number_out = current_inode_number;
         *result_inode = current_inode;
@@ -416,11 +440,6 @@ int resolve_path(FILE *image_fp, long fs_offset,
     component = strtok(path_copy, "/");
 
     while (component != NULL) {
-        /*if (strcmp(component, ".") == 0){
-            component = strtok(NULL, "/");
-            continue;
-        }*/
-
         if (!is_directory_mode(current_inode.mode)) {
             return -1;
         }
@@ -470,7 +489,30 @@ int list_directory(FILE *image_fp, long fs_offset,
         return -1;
     }
 
-    printf("%s:\n", display_path);
+    //printf("%s:\n", display_path);
+    char canonical_path[1024];
+    const char *src = display_path;
+    char *dst = canonical_path;
+    *dst++ = '/';
+    int last_was_slash = 1;
+    while (*src) {
+        if (*src == '/') {
+            if (!last_was_slash) {
+                *dst++ = '/';
+                last_was_slash = 1;
+            }
+            src++;
+        } else {
+            *dst++ = *src++;
+            last_was_slash = 0;
+        }
+    }
+    if (dst > canonical_path + 1 && *(dst-1) == '/') {
+        dst--;
+    }
+    *dst = '\0';
+    printf("%s:\n", canonical_path);
+
 
     total_entries = directory_inode->size / DIR_ENTRY_SIZE;
     entries_per_block = superblock->blocksize / DIR_ENTRY_SIZE;
@@ -504,7 +546,10 @@ int list_directory(FILE *image_fp, long fs_offset,
                 continue;
             }
 
-            entries[entry_index].name[59] = '\0';
+            char safe_name[61];
+            memcpy(safe_name, entries[entry_index].name, 60);
+            safe_name[60] = '\0';
+
 
             if (read_inode(image_fp, fs_offset, superblock,
                            entries[entry_index].inode,
@@ -513,7 +558,7 @@ int list_directory(FILE *image_fp, long fs_offset,
                 return -1;
             }
 
-            print_inode_summary(&entry_inode, entries[entry_index].name);
+            print_inode_summary(&entry_inode, safe_name);
         }
     }
 
