@@ -35,6 +35,11 @@ test: minls
 	./minls -p 0 ~pn-cs453/Given/Asgn5/Images/Partitioned /
 	```
 
+#HandIn Commands
+turnin: minls.c minget.c minfs.c minfs.h Makefile README
+	handin pn-cs453 asgn5 README Makefile minfs.c minfs.h minls.c minget.c
+	handin pn-cs453 asgn5 > submitted
+
 clean:
 	rm -f minls *.o
 
