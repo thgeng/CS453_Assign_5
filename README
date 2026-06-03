@@ -6,6 +6,11 @@ Due: 06/3/2026
 
 Instructions:
     Compiling/Make
-        make
+        make (or make all)
+            - compiles both minls & minget
+        make minls
+            - compiles minls
+        make minget
+            - compiles only minget
 
 Notes
