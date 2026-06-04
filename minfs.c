@@ -4,7 +4,7 @@
  * Zone 0 is special (never valid data zone). */
 static uint32_t zone_to_block(const Superblock *superblock, uint32_t zone)
 {
-    if (zone == 0) return 0;
+    if (zone == 0) return EXIT_SUCCESS;
     return zone << superblock->log_zone_size;
 }
 
@@ -32,14 +32,14 @@ static void print_superblock_verbose(const Superblock *superblock)
 int read_bytes(FILE *image_fp, long offset, void *buffer, size_t size)
 {
     if (fseek(image_fp, offset, SEEK_SET) != 0) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (fread(buffer, 1, size, image_fp) != size) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 int read_partition_table(FILE *image_fp, long table_offset,
@@ -50,19 +50,21 @@ int read_partition_table(FILE *image_fp, long table_offset,
     if (read_bytes(image_fp, table_offset + PARTITION_TABLE_OFFSET,
                    table,
                    PARTITION_COUNT * sizeof(PartitionEntry)) != 0) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
-    if (read_bytes(image_fp, table_offset + 510, signature, 2) != 0) {
-        return -1;
+    if (read_bytes(image_fp, 
+            table_offset + BOOT_SIGNATURE_OFFSET, 
+            signature, 2) != 0) {
+        return EXIT_FAILURE;
     }
 
     if (signature[0] != PARTITION_MAGIC1 ||
         signature[1] != PARTITION_MAGIC2) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 int resolve_filesystem_offset(FILE *image_fp, int has_partition,
@@ -76,18 +78,18 @@ int resolve_filesystem_offset(FILE *image_fp, int has_partition,
     *fs_offset = 0;
 
     if (!has_partition) {
-        return 0;
+        return EXIT_SUCCESS;
     }
 
     if (partition_number < 0 || partition_number >= PARTITION_COUNT) {
         fprintf(stderr, "Invalid partition number: %d\n",
                 partition_number);
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (read_partition_table(image_fp, 0, table) != 0) {
         fprintf(stderr, "Invalid partition table in image\n");
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (verbose) {
@@ -101,24 +103,24 @@ int resolve_filesystem_offset(FILE *image_fp, int has_partition,
     chosen = table[partition_number];
     if (chosen.type != MINIX_PARTITION_TYPE) {
         fprintf(stderr, "Requested partition is not a MINIX partition\n");
-        return -1;
+        return EXIT_FAILURE;
     }
 
     *fs_offset = (long) chosen.lFirst * SECTOR_SIZE;
 
     if (!has_subpartition) {
-        return 0;
+        return EXIT_SUCCESS;
     }
 
     if (subpartition_number < 0 || subpartition_number >= PARTITION_COUNT) {
         fprintf(stderr, "Invalid subpartition number: %d\n",
                 subpartition_number);
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (read_partition_table(image_fp, *fs_offset, table) != 0) {
         fprintf(stderr, "Invalid subpartition table\n");
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (verbose) {
@@ -134,12 +136,12 @@ int resolve_filesystem_offset(FILE *image_fp, int has_partition,
     if (chosen.type != MINIX_PARTITION_TYPE) {
         fprintf(stderr,
                 "Requested subpartition is not a MINIX partition\n");
-        return -1;
+        return EXIT_FAILURE;
     }
 
     *fs_offset = (long) chosen.lFirst * SECTOR_SIZE;
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 int read_superblock(FILE *image_fp, long fs_offset,
@@ -147,20 +149,20 @@ int read_superblock(FILE *image_fp, long fs_offset,
 {
     long superblock_offset;
 
-    superblock_offset = fs_offset + 1024;
+    superblock_offset = fs_offset + SUPERBLOCK_OFFSET;
 
     if (read_bytes(image_fp, superblock_offset,
                    superblock, sizeof(Superblock)) != 0) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (superblock->magic != MINIX_MAGIC) {
         fprintf(stderr, "Invalid superblock magic: 0x%x\n",
                 superblock->magic);
-        return -1;
+        return EXIT_FAILURE;
     }
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 int read_inode(FILE *image_fp, long fs_offset,
@@ -172,7 +174,7 @@ int read_inode(FILE *image_fp, long fs_offset,
     long inode_offset;
 
     if (inode_number == 0 || inode_number > superblock->ninodes) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
     inode_table_block = 2 + superblock->i_blocks +
@@ -217,7 +219,7 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
         long indirect_offset;
 
         if (inode->indirect == 0) {
-            return 0;  /* hole or unallocated indirect */
+            return EXIT_SUCCESS;  /* hole or unallocated indirect */
         }
 
         indirect_zone = inode->indirect;
@@ -229,7 +231,7 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
                 indirect_offset, 
                 &zone_number, 
                 sizeof(uint32_t)) != 0) {
-            return 0;
+            return EXIT_SUCCESS;
         }
         return zone_number;  /* may be 0 for hole in this indirect entry */
     }
@@ -249,7 +251,8 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
         d2 = logic_zone_idx % entries_per_indirect;
 
         if (inode->two_indirect == 0) {
-            return 0;  /* no double indirect allocated->hole for this range */
+            return EXIT_SUCCESS;  
+            /* no double indirect allocated->hole for this range */
         }
 
         d_indirect_zone = inode->two_indirect;
@@ -261,10 +264,10 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
                 d_offset, 
                 &single_indirect_zone, 
                 sizeof(uint32_t)) != 0) {
-            return 0;
+            return EXIT_SUCCESS;
         }
         if (single_indirect_zone == 0) {
-            return 0;  /* hole at first level of double-indirect */
+            return EXIT_SUCCESS;  /* hole at first level of double-indirect */
         }
 
         /* Now lookup in the single-indirect zone's first block */
@@ -276,13 +279,13 @@ uint32_t get_file_zone(FILE *image_fp, long fs_offset,
                 s_offset, 
                 &zone_number, 
                 sizeof(uint32_t)) != 0) {
-            return 0;
+            return EXIT_SUCCESS;
         }
         return zone_number;  /* may be 0 -> hole */
     }
 
     /* Beyond supported range (triple indirect not in Minix V3) */
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 int read_file_block(FILE *image_fp, long fs_offset,
@@ -296,7 +299,7 @@ int read_file_block(FILE *image_fp, long fs_offset,
     if (zone_number == 0) {
         /* Hole:entire zone (thus this block) is zeros. Per assignment spec. */
         memset(buffer, 0, superblock->blocksize);
-        return 0;
+        return EXIT_SUCCESS;
     }
 
     uint32_t block_number = zone_to_block(superblock, zone_number);
@@ -323,15 +326,15 @@ int is_regular_mode(uint16_t mode)
 void mode_to_string(uint16_t mode, char out[11])
 {
     out[0] = is_directory_mode(mode) ? 'd' : '-';
-    out[1] = (mode & 0400) ? 'r' : '-';
-    out[2] = (mode & 0200) ? 'w' : '-';
-    out[3] = (mode & 0100) ? 'x' : '-';
-    out[4] = (mode & 0040) ? 'r' : '-';
-    out[5] = (mode & 0020) ? 'w' : '-';
-    out[6] = (mode & 0010) ? 'x' : '-';
-    out[7] = (mode & 0004) ? 'r' : '-';
-    out[8] = (mode & 0002) ? 'w' : '-';
-    out[9] = (mode & 0001) ? 'x' : '-';
+    out[1] = (mode & MASK_O_R) ? 'r' : '-';
+    out[2] = (mode & MASK_O_W) ? 'w' : '-';
+    out[3] = (mode & MASK_O_X) ? 'x' : '-';
+    out[4] = (mode & MASK_G_R) ? 'r' : '-';
+    out[5] = (mode & MASK_G_W) ? 'w' : '-';
+    out[6] = (mode & MASK_G_X) ? 'x' : '-';
+    out[7] = (mode & MASK_OT_R) ? 'r' : '-';
+    out[8] = (mode & MASK_OT_W) ? 'w' : '-';
+    out[9] = (mode & MASK_OT_X) ? 'x' : '-';
     out[10] = '\0';
 }
 
@@ -360,7 +363,7 @@ int find_in_directory(FILE *image_fp, long fs_offset,
 
     block_buffer = malloc(superblock->blocksize);
     if (block_buffer == NULL) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
     total_entries = directory_inode->size / DIR_ENTRY_SIZE;
@@ -378,7 +381,7 @@ int find_in_directory(FILE *image_fp, long fs_offset,
                             directory_inode, block_index,
                             block_buffer) != 0) {
             free(block_buffer);
-            return -1;
+            return EXIT_FAILURE;
         }
 
         entries = (DirEntry *) block_buffer;
@@ -392,20 +395,20 @@ int find_in_directory(FILE *image_fp, long fs_offset,
                 continue;
             }
 
-            char safe_name[61];
-            memcpy(safe_name, entries[entry_index].name, 60);
-            safe_name[60] = '\0';
+            char safe_name[MAX_FILENAME_SIZE + 1];
+            memcpy(safe_name, entries[entry_index].name, MAX_FILENAME_SIZE);
+            safe_name[MAX_FILENAME_SIZE] = '\0';
 
             if (strcmp(safe_name, name) == 0) {
                 *inode_number_out = entries[entry_index].inode;
                 free(block_buffer);
-                return 0;
+                return EXIT_SUCCESS;
             }
         }
     }
 
     free(block_buffer);
-    return -1;
+    return EXIT_FAILURE;
 }
 
 int resolve_path(FILE *image_fp, long fs_offset,
@@ -417,23 +420,23 @@ int resolve_path(FILE *image_fp, long fs_offset,
     Inode current_inode;
     uint32_t current_inode_number;
     uint32_t next_inode_number;
-    char path_copy[1024];
+    char path_copy[BUFF_SIZE];
     char *component;
 
     if (strlen(path) >= sizeof(path_copy)) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
     current_inode_number = ROOT_INODE;
     if (read_inode(image_fp, fs_offset, superblock,
                    current_inode_number, &current_inode) != 0) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (path[0] == '\0' || strcmp(path, "/") == 0) {
         *inode_number_out = current_inode_number;
         *result_inode = current_inode;
-        return 0;
+        return EXIT_SUCCESS;
     }
 
     strcpy(path_copy, path);
@@ -441,18 +444,18 @@ int resolve_path(FILE *image_fp, long fs_offset,
 
     while (component != NULL) {
         if (!is_directory_mode(current_inode.mode)) {
-            return -1;
+            return EXIT_FAILURE;
         }
 
         if (find_in_directory(image_fp, fs_offset, superblock,
                               &current_inode, component,
                               &next_inode_number) != 0) {
-            return -1;
+            return EXIT_FAILURE;
         }
 
         if (read_inode(image_fp, fs_offset, superblock,
                        next_inode_number, &current_inode) != 0) {
-            return -1;
+            return EXIT_FAILURE;
         }
 
         current_inode_number = next_inode_number;
@@ -461,7 +464,7 @@ int resolve_path(FILE *image_fp, long fs_offset,
 
     *inode_number_out = current_inode_number;
     *result_inode = current_inode;
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 int list_directory(FILE *image_fp, long fs_offset,
@@ -480,17 +483,17 @@ int list_directory(FILE *image_fp, long fs_offset,
 
     if (!is_directory_mode(directory_inode->mode)) {
         fprintf(stderr, "%s is not a directory\n", display_path);
-        return -1;
+        return EXIT_FAILURE;
     }
 
     block_buffer = malloc(superblock->blocksize);
     if (block_buffer == NULL) {
         fprintf(stderr, "malloc failed in list_directory\n");
-        return -1;
+        return EXIT_FAILURE;
     }
 
     //printf("%s:\n", display_path);
-    char canonical_path[1024];
+    char canonical_path[BUFF_SIZE];
     const char *src = display_path;
     char *dst = canonical_path;
     *dst++ = '/';
@@ -530,7 +533,7 @@ int list_directory(FILE *image_fp, long fs_offset,
                             block_buffer) != 0) {
             fprintf(stderr, "Failed to read directory block\n");
             free(block_buffer);
-            return -1;
+            return EXIT_FAILURE;
         }
 
         entries = (DirEntry *) block_buffer;
@@ -546,16 +549,16 @@ int list_directory(FILE *image_fp, long fs_offset,
                 continue;
             }
 
-            char safe_name[61];
-            memcpy(safe_name, entries[entry_index].name, 60);
-            safe_name[60] = '\0';
+            char safe_name[MAX_FILENAME_SIZE + 1];
+            memcpy(safe_name, entries[entry_index].name, MAX_FILENAME_SIZE);
+            safe_name[MAX_FILENAME_SIZE] = '\0';
 
 
             if (read_inode(image_fp, fs_offset, superblock,
                            entries[entry_index].inode,
                            &entry_inode) != 0) {
                 free(block_buffer);
-                return -1;
+                return EXIT_FAILURE;
             }
 
             print_inode_summary(&entry_inode, safe_name);
@@ -563,5 +566,5 @@ int list_directory(FILE *image_fp, long fs_offset,
     }
 
     free(block_buffer);
-    return 0;
+    return EXIT_SUCCESS;
 }

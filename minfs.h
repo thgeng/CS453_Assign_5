@@ -20,10 +20,25 @@
 #define ROOT_INODE               1
 #define PARTITION_COUNT          4
 
+#define BOOT_SIGNATURE_OFFSET 510
+#define SUPERBLOCK_OFFSET 1024
+#define MAX_FILENAME_SIZE 60
+#define BUFF_SIZE 1024
+
 /* Mode bit masks */
 #define MODE_TYPE_MASK           0170000
 #define MODE_REGULAR             0100000
 #define MODE_DIRECTORY           0040000
+
+#define MASK_O_R 0400
+#define MASK_O_W 0200
+#define MASK_O_X 0100
+#define MASK_G_R 0040
+#define MASK_G_W 0020
+#define MASK_G_X 0010
+#define MASK_OT_R 0004
+#define MASK_OT_W 0002
+#define MASK_OT_X 0001
 
 typedef struct __attribute__((packed)) PartitionEntry {
     uint8_t  bootind;
