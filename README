@@ -1,4 +1,4 @@
-Marc Martinez (mmart430) & Geng Thomas ()
+Marc Martinez (mmart430) & Geng Thomas (thgeng)
 Dr. Nico
 CSC453
 Assignment 5
@@ -13,4 +13,10 @@ Instructions:
         make minget
             - compiles only minget
 
+Functions generally implemented to specifications, with perhaps small
+    deviations in verbosity style and error report formatting.
+
 Notes
+    Group formed late, so efforts to coalesce the collective code styling 
+    and inter-functionality could be cleaner and better documented, but 
+    functionality is there and will clean up more time permitting.
