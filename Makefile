@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11
+CFLAGS = -Wall -Wextra -std=c11 -Wno-unused
 
 all: minls minget
 
@@ -41,6 +41,6 @@ turnin: minls.c minget.c minfs.c minfs.h Makefile README
 	handin pn-cs453 asgn5 > submitted
 
 clean:
-	rm -f minls *.o
+	rm -f minls minget *.o core* *DETAILS*
 
 .PHONY: all test clean
